@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CrossHang — a crossword you fill by hanging</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,800;1,600&family=Special+Elite&display=swap" rel="stylesheet" />
+<style>
+  /* ============================================================
+     THEME — a vintage newsprint puzzle page.
+     All colors live here as variables so you can re-skin the whole
+     game by editing this block.
+     ============================================================ */
+  :root {
+    --paper:    #f3ead3;
+    --paper-2:  #ece0c2;
+    --ink:      #2a2018;
+    --ink-soft: #6b5d49;
+    --rule:     #2a2018;
+    --danger:   #9b2c25;
+    --reveal:   #f7f1e1;
+    --gold:     #b08431;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: var(--paper);
+    /* faint paper grain: two soft radial smudges layered over the base */
+    background-image:
+      radial-gradient(circle at 20% 15%, rgba(0,0,0,.035), transparent 40%),
+      radial-gradient(circle at 85% 80%, rgba(0,0,0,.04), transparent 45%);
+    color: var(--ink);
+    font-family: 'Special Elite', 'Courier New', monospace;
+  }
+
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 32px 20px 56px;
+  }
+
+  /* ---- Masthead ---- */
+  header { text-align: center; border-bottom: 3px double var(--rule); padding-bottom: 14px; }
+  h1 {
+    font-family: 'Playfair Display', serif;
+    font-weight: 800;
+    font-size: clamp(2.1rem, 6vw, 3.2rem);
+    letter-spacing: .02em;
+    margin: 0;
+  }
+  .tagline {
+    font-style: italic;
+    color: var(--ink-soft);
+    margin-top: 4px;
+    font-family: 'Playfair Display', serif;
+  }
+
+  /* ---- Layout: board + gallows side by side, stacking on narrow screens ---- */
+  .stage {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 28px;
+    justify-content: center;
+    align-items: flex-start;
+    margin-top: 28px;
+  }
+
+  /* ---- The crossword board ---- */
+  #board { display: grid; gap: 4px; }
+  .cell {
+    width: 52px; height: 52px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.7rem;
+    position: relative;
+    user-select: none;
+  }
+  .cell.block { background: transparent; }           /* not part of any word */
+  .cell.letter {
+    background: var(--reveal);
+    border: 2px solid var(--ink);
+    box-shadow: 2px 2px 0 rgba(0,0,0,.18);
+  }
+  /* small clue-number tucked in the corner, like a real crossword */
+  .cell .num {
+    position: absolute; top: 1px; left: 3px;
+    font-size: .62rem; color: var(--ink-soft);
+  }
+  /* the solution glyph: hidden until its letter is guessed */
+  .cell .glyph { opacity: 0; transform: scale(.4); transition: opacity .25s, transform .25s; }
+  .cell.revealed .glyph { opacity: 1; transform: scale(1); }
+  .cell.letter { cursor: pointer; }
+  .cell.revealed { cursor: default; }
+  /* the square you're currently typing into */
+  .cell.selected { outline: 3px solid var(--gold); outline-offset: -3px; }
+  /* brief red shake when a typed letter is wrong */
+  @keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-4px)} 40%,80%{transform:translateX(4px)} }
+  .cell.wrong-flash { animation: shake .32s; background: var(--danger); }
+
+  /* ---- The gallows ---- */
+  .gallows-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  #gallows { width: 180px; height: 220px; }
+  #gallows .frame { stroke: var(--ink); stroke-width: 6; fill: none; stroke-linecap: round; }
+  #gallows .rope  { stroke: var(--ink); stroke-width: 3; fill: none; }
+  #gallows .body  { stroke: var(--danger); stroke-width: 5; fill: none; stroke-linecap: round;
+                    opacity: 0; transition: opacity .25s; }
+  #gallows .body.show { opacity: 1; }
+  .lives { font-family: 'Playfair Display', serif; font-style: italic; color: var(--ink-soft); }
+
+  /* ---- Clues ---- */
+  .clues { margin-top: 34px; display: flex; gap: 40px; flex-wrap: wrap; justify-content: center;
+           border-top: 1px solid var(--rule); padding-top: 18px; }
+  .clue-col h2 {
+    font-family: 'Playfair Display', serif; font-size: 1.15rem; margin: 0 0 8px;
+    text-transform: uppercase; letter-spacing: .12em;
+  }
+  .clue-col ol { margin: 0; padding-left: 1.4em; line-height: 1.7; }
+  .clue-col li::marker { color: var(--ink-soft); }
+  .clue-col li { margin-bottom: 6px; }
+  .hint-btn {
+    font-family: 'Special Elite', monospace; background: var(--paper-2);
+    border: 1.5px solid var(--ink); padding: 2px 10px; cursor: pointer; font-size: .82rem;
+  }
+  .hint-btn:hover { background: var(--ink); color: var(--paper); }
+
+  .help {
+    text-align: center; max-width: 560px; margin: 22px auto 0;
+    font-family: 'Playfair Display', serif; font-style: italic;
+    color: var(--ink-soft); line-height: 1.5;
+  }
+
+  /* ---- On-screen keyboard ---- */
+  #keyboard { margin-top: 30px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .krow { display: flex; gap: 8px; }
+  .key {
+    font-family: 'Special Elite', monospace;
+    width: 40px; height: 48px;
+    background: var(--paper-2);
+    border: 2px solid var(--ink);
+    box-shadow: 2px 2px 0 rgba(0,0,0,.2);
+    font-size: 1.1rem; cursor: pointer; color: var(--ink);
+    transition: transform .05s, background .2s, color .2s, box-shadow .05s;
+  }
+  .key:active { transform: translate(2px,2px); box-shadow: none; }
+  .key:disabled { cursor: default; opacity: .9; }
+  .key.correct { background: var(--ink); color: var(--reveal); }
+  .key.wrong   { background: var(--danger); color: var(--reveal); border-color: var(--danger); }
+
+  /* ---- Status banner + reset ---- */
+  .status {
+    text-align: center; margin-top: 26px; min-height: 2.2rem;
+    font-family: 'Playfair Display', serif; font-size: 1.4rem; font-weight: 600;
+  }
+  .status.win  { color: var(--gold); }
+  .status.lose { color: var(--danger); }
+  .reset {
+    display: block; margin: 14px auto 0;
+    font-family: 'Special Elite', monospace; font-size: .95rem;
+    background: var(--ink); color: var(--paper);
+    border: none; padding: 10px 22px; cursor: pointer; letter-spacing: .05em;
+  }
+  .reset:hover { background: var(--danger); }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>CrossHang</h1>
+    <div class="tagline">a crossword you fill by guessing — one wrong letter at a time</div>
+  </header>
+
+  <div class="stage">
+    <div id="board" aria-label="puzzle grid"></div>
+    <div class="gallows-wrap">
+      <!-- The gallows. The frame + rope are always drawn; the six .body parts
+           fade in one-by-one as wrong guesses accumulate. -->
+      <svg id="gallows" viewBox="0 0 180 220">
+        <!-- frame -->
+        <path class="frame" d="M20 210 H110" />          <!-- ground -->
+        <path class="frame" d="M40 210 V20" />           <!-- post -->
+        <path class="frame" d="M40 20 H120" />           <!-- beam -->
+        <path class="rope"  d="M120 20 V45" />           <!-- rope -->
+        <!-- body parts, hidden until needed (data-part = how many wrongs needed) -->
+        <circle class="body" data-part="1" cx="120" cy="60" r="15" />        <!-- head -->
+        <path   class="body" data-part="2" d="M120 75 V130" />               <!-- torso -->
+        <path   class="body" data-part="3" d="M120 90 L98 112" />            <!-- left arm -->
+        <path   class="body" data-part="4" d="M120 90 L142 112" />           <!-- right arm -->
+        <path   class="body" data-part="5" d="M120 130 L100 165" />          <!-- left leg -->
+        <path   class="body" data-part="6" d="M120 130 L140 165" />          <!-- right leg -->
+      </svg>
+      <div class="lives" id="lives"></div>
+    </div>
+  </div>
+
+  <p class="help">
+    Two ways to play: click a square and type to fill that one cell — a wrong letter
+    costs you a limb. Or use the keys below to reveal every copy of a letter at once.
+  </p>
+
+  <div class="clues">
+    <div class="clue-col"><h2>Across</h2><ol id="across"></ol></div>
+    <div class="clue-col"><h2>Down</h2><ol id="down"></ol></div>
+  </div>
+
+  <div id="keyboard"></div>
+  <div class="status" id="status"></div>
+  <button class="reset" id="reset">New Game</button>
+</div>
+
+<script>
+/* ================================================================
+   1. THE PUZZLE
+   ----------------------------------------------------------------
+   This is the ONLY thing you edit to make a new puzzle. Everything
+   else (the grid shape, clue numbers, the solution letters) is
+   derived from this list automatically. Each word needs:
+     answer : the word in CAPS
+     clue   : the hint shown to the player
+     row,col: zero-indexed position of the word's FIRST letter
+     dir    : "across" or "down"
+   Overlapping letters must agree (e.g. CAT and AREA share the 'A').
+   ================================================================ */
+const PUZZLE = [
+  { answer: "CAT",  clue: "A common house pet",            row: 0, col: 0, dir: "across" },
+  { answer: "PEA",  clue: "Small green vegetable",         row: 2, col: 0, dir: "across" },
+  { answer: "AREA", clue: "Length times width gives this", row: 0, col: 1, dir: "down"   },
+  { answer: "TEA",  clue: "Hot drink made from leaves",    row: 0, col: 2, dir: "down"   },
+];
+
+const MAX_WRONG = 6;   // gallows has 6 body parts — change at your peril
+
+/* ================================================================
+   2. DERIVE THE GRID
+   Build a lookup of every filled cell -> its solution letter, plus
+   the grid's overall size. key format is "row,col".
+   ================================================================ */
+function buildSolution(puzzle) {
+  const cells = {};            // "r,c" -> letter
+  let maxRow = 0, maxCol = 0;
+  for (const w of puzzle) {
+    for (let i = 0; i < w.answer.length; i++) {
+      const r = w.dir === "down"   ? w.row + i : w.row;
+      const c = w.dir === "across" ? w.col + i : w.col;
+      cells[`${r},${c}`] = w.answer[i];
+      maxRow = Math.max(maxRow, r);
+      maxCol = Math.max(maxCol, c);
+    }
+  }
+  return { cells, rows: maxRow + 1, cols: maxCol + 1 };
+}
+
+/* Assign crossword-style numbers: a cell gets a number if it starts
+   an across word (nothing to its left, something to its right) or a
+   down word (nothing above, something below). Numbered in reading order. */
+function numberCells(solution) {
+  const { cells, rows, cols } = solution;
+  const has = (r, c) => cells[`${r},${c}`] !== undefined;
+  const numbers = {};          // "r,c" -> number
+  let n = 1;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (!has(r, c)) continue;
+      const startsAcross = !has(r, c - 1) && has(r, c + 1);
+      const startsDown   = !has(r - 1, c) && has(r + 1, c);
+      if (startsAcross || startsDown) numbers[`${r},${c}`] = n++;
+    }
+  }
+  return numbers;
+}
+
+/* ================================================================
+   3. GAME STATE
+   ================================================================ */
+let solution, numbers, guessed, wrong, over, revealed, selected;
+
+function newGame() {
+  solution = buildSolution(PUZZLE);
+  numbers  = numberCells(solution);
+  guessed  = new Set();   // letters tried via the ON-SCREEN keyboard (drives key colours + bulk reveals)
+  revealed = new Set();   // cell keys "r,c" that are currently shown (filled by EITHER input method)
+  wrong    = 0;           // shared body-part counter
+  over     = false;
+  // start with the first cell selected so typing works immediately
+  selected = letterCellsInOrder().find(k => !revealed.has(k)) || null;
+  renderBoard();
+  renderClues();
+  renderKeyboard();
+  renderGallows();
+  setStatus("");
+}
+
+/* All letter-cell keys in reading order (left-to-right, top-to-bottom). */
+function letterCellsInOrder() {
+  const keys = [];
+  for (let r = 0; r < solution.rows; r++)
+    for (let c = 0; c < solution.cols; c++)
+      if (solution.cells[`${r},${c}`] !== undefined) keys.push(`${r},${c}`);
+  return keys;
+}
+
+/* The set of letters that actually appear in the puzzle. */
+function solutionLetters() {
+  return new Set(Object.values(solution.cells));
+}
+
+/* ================================================================
+   4. RENDERING
+   ================================================================ */
+function renderBoard() {
+  const board = document.getElementById("board");
+  board.style.gridTemplateColumns = `repeat(${solution.cols}, 52px)`;
+  board.innerHTML = "";
+  for (let r = 0; r < solution.rows; r++) {
+    for (let c = 0; c < solution.cols; c++) {
+      const key = `${r},${c}`;
+      const div = document.createElement("div");
+      const letter = solution.cells[key];
+      if (letter === undefined) {
+        div.className = "cell block";        // empty filler cell
+      } else {
+        div.className = "cell letter";
+        div.dataset.key = key;
+        if (revealed.has(key)) div.classList.add("revealed");
+        if (key === selected)  div.classList.add("selected");
+        if (numbers[key]) {
+          const num = document.createElement("span");
+          num.className = "num"; num.textContent = numbers[key];
+          div.appendChild(num);
+        }
+        const glyph = document.createElement("span");
+        glyph.className = "glyph"; glyph.textContent = letter;
+        div.appendChild(glyph);
+        div.addEventListener("click", () => selectCell(key));
+      }
+      board.appendChild(div);
+    }
+  }
+}
+
+function renderClues() {
+  const across = document.getElementById("across");
+  const down   = document.getElementById("down");
+  across.innerHTML = ""; down.innerHTML = "";
+  // sort by clue number so they read in order
+  const sorted = [...PUZZLE].sort((a, b) =>
+    numbers[`${a.row},${a.col}`] - numbers[`${b.row},${b.col}`]);
+  for (const w of sorted) {
+    const li = document.createElement("li");
+    li.value = numbers[`${w.row},${w.col}`];   // show the real crossword number
+
+    // hint starts hidden behind a button; clicking swaps the button for the clue text
+    const btn = document.createElement("button");
+    btn.className = "hint-btn";
+    btn.textContent = "Reveal hint";
+    btn.addEventListener("click", () => { li.textContent = w.clue; li.value = numbers[`${w.row},${w.col}`]; });
+    li.appendChild(btn);
+
+    (w.dir === "across" ? across : down).appendChild(li);
+  }
+}
+
+function renderKeyboard() {
+  const rows = ["ABCDEFGHI", "JKLMNOPQR", "STUVWXYZ"];
+  const kb = document.getElementById("keyboard");
+  kb.innerHTML = "";
+  const inPuzzle = solutionLetters();
+  for (const row of rows) {
+    const div = document.createElement("div");
+    div.className = "krow";
+    for (const ch of row) {
+      const btn = document.createElement("button");
+      btn.className = "key";
+      btn.textContent = ch;
+      if (guessed.has(ch)) {
+        btn.disabled = true;
+        btn.classList.add(inPuzzle.has(ch) ? "correct" : "wrong");
+      }
+      btn.addEventListener("click", () => guess(ch));
+      div.appendChild(btn);
+    }
+    kb.appendChild(div);
+  }
+}
+
+function renderGallows() {
+  document.querySelectorAll("#gallows .body").forEach(part => {
+    const needed = Number(part.dataset.part);
+    part.classList.toggle("show", wrong >= needed);
+  });
+  document.getElementById("lives").textContent =
+    `${MAX_WRONG - wrong} ${MAX_WRONG - wrong === 1 ? "life" : "lives"} left`;
+}
+
+function setStatus(text, kind = "") {
+  const el = document.getElementById("status");
+  el.textContent = text;
+  el.className = "status" + (kind ? " " + kind : "");
+}
+
+/* ================================================================
+   5. THE TWO INPUT MECHANICS
+      A) on-screen keyboard  -> reveal every copy of a letter
+      B) physical typing     -> fill the one selected cell
+   ================================================================ */
+/* --- Mechanic A: the ON-SCREEN keyboard reveals EVERY copy of a letter --- */
+function guess(letter) {
+  if (over || guessed.has(letter)) return;
+  guessed.add(letter);
+
+  if (solutionLetters().has(letter)) {
+    // correct: reveal every cell holding this letter
+    for (const [k, v] of Object.entries(solution.cells)) {
+      if (v === letter) revealed.add(k);
+    }
+    if (selected && revealed.has(selected)) advanceSelection(selected);
+    renderBoard();
+  } else {
+    // wrong: another piece of the body goes up
+    wrong++;
+    renderGallows();
+  }
+  renderKeyboard();
+  checkEnd();
+}
+
+/* --- Mechanic B: PHYSICAL typing fills the single selected cell --- */
+function typeIntoCell(letter) {
+  if (over || !selected) return;
+  if (revealed.has(selected)) { advanceSelection(selected); renderBoard(); return; }
+
+  if (letter === solution.cells[selected]) {
+    // correct: reveal just this cell and hop to the next empty one
+    revealed.add(selected);
+    advanceSelection(selected);
+    renderBoard();
+  } else {
+    // wrong: shake the cell and add a body part (shared gallows pool)
+    wrong++;
+    flashWrong(selected);
+    renderGallows();
+  }
+  checkEnd();
+}
+
+/* Clicking a square selects it for typing. */
+function selectCell(key) {
+  if (over) return;
+  selected = key;
+  renderBoard();
+}
+
+/* Move the selection to the next not-yet-revealed cell, wrapping around. */
+function advanceSelection(fromKey) {
+  const order = letterCellsInOrder();
+  const start = order.indexOf(fromKey);
+  for (let i = 1; i <= order.length; i++) {
+    const k = order[(start + i) % order.length];
+    if (!revealed.has(k)) { selected = k; return; }
+  }
+  selected = null;   // nothing left to fill
+}
+
+/* Briefly flash a cell red without re-rendering the whole board. */
+function flashWrong(key) {
+  const el = document.querySelector(`#board .cell[data-key="${key}"]`);
+  if (!el) return;
+  el.classList.add("wrong-flash");
+  setTimeout(() => el.classList.remove("wrong-flash"), 340);
+}
+
+function checkEnd() {
+  const allCells = Object.keys(solution.cells);
+  const solved = allCells.every(k => revealed.has(k));
+  if (solved) {
+    over = true;
+    selected = null;
+    renderBoard();
+    setStatus("Solved it — and lived to tell the tale!", "win");
+  } else if (wrong >= MAX_WRONG) {
+    over = true;
+    setStatus("The gallows win this round.", "lose");
+    revealAll();
+  }
+}
+
+/* On a loss, fill in the answers so the player sees what they missed. */
+function revealAll() {
+  Object.keys(solution.cells).forEach(k => revealed.add(k));
+  selected = null;
+  renderBoard();
+}
+
+/* ================================================================
+   6. WIRING — physical keyboard + reset button + start
+   ================================================================ */
+document.addEventListener("keydown", e => {
+  const ch = e.key.toUpperCase();
+  if (ch.length === 1 && ch >= "A" && ch <= "Z") typeIntoCell(ch);
+});
+document.getElementById("reset").addEventListener("click", newGame);
+
+newGame();
+</script>
+</body>
+</html>
